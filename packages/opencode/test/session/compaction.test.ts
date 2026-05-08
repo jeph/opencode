@@ -1098,6 +1098,158 @@ describe("session.compaction.process", () => {
     })
   })
 
+  test("strips signed reasoning from Bedrock Claude summary prompt", async () => {
+    await using tmp = await tmpdir({ git: true })
+    const stub = llm()
+    let captured = ""
+    stub.push(
+      reply("summary", (input) => {
+        captured = JSON.stringify(input.messages)
+      }),
+    )
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const session = await svc.create({})
+        const prompt = await user(session.id, "question")
+        const answer = await assistant(session.id, prompt.id, tmp.path)
+        await svc.updatePart({
+          id: PartID.ascending(),
+          messageID: answer.id,
+          sessionID: session.id,
+          type: "reasoning",
+          text: "private thinking",
+          metadata: { bedrock: { signature: "sig" } },
+          time: { start: 0 },
+        })
+        await svc.updatePart({
+          id: PartID.ascending(),
+          messageID: answer.id,
+          sessionID: session.id,
+          type: "text",
+          text: "final answer",
+        })
+        await SessionCompaction.create({
+          sessionID: session.id,
+          agent: "build",
+          model: ref,
+          auto: false,
+        })
+
+        const rt = liveRuntime(
+          stub.layer,
+          ProviderTest.fake({
+            model: {
+              ...createModel({ context: 100_000, output: 32_000, npm: "@ai-sdk/amazon-bedrock" }),
+              api: {
+                id: "anthropic.claude-opus-4-6",
+                url: "https://bedrock-runtime.us-east-1.amazonaws.com",
+                npm: "@ai-sdk/amazon-bedrock",
+              },
+            },
+          }),
+        )
+        try {
+          const msgs = await svc.messages({ sessionID: session.id })
+          const parent = msgs.at(-1)?.info.id
+          expect(parent).toBeTruthy()
+          await rt.runPromise(
+            SessionCompaction.Service.use((svc) =>
+              svc.process({
+                parentID: parent!,
+                messages: msgs,
+                sessionID: session.id,
+                auto: false,
+              }),
+            ),
+          )
+
+          expect(captured).toContain("final answer")
+          expect(captured).not.toContain("private thinking")
+          expect(captured).not.toContain("sig")
+        } finally {
+          await rt.dispose()
+        }
+      },
+    })
+  })
+
+  test("keeps signed reasoning in non-Anthropic Bedrock summary prompt", async () => {
+    await using tmp = await tmpdir({ git: true })
+    const stub = llm()
+    let captured = ""
+    stub.push(
+      reply("summary", (input) => {
+        captured = JSON.stringify(input.messages)
+      }),
+    )
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const session = await svc.create({})
+        const prompt = await user(session.id, "question")
+        const answer = await assistant(session.id, prompt.id, tmp.path)
+        await svc.updatePart({
+          id: PartID.ascending(),
+          messageID: answer.id,
+          sessionID: session.id,
+          type: "reasoning",
+          text: "private thinking",
+          metadata: { bedrock: { signature: "sig" } },
+          time: { start: 0 },
+        })
+        await svc.updatePart({
+          id: PartID.ascending(),
+          messageID: answer.id,
+          sessionID: session.id,
+          type: "text",
+          text: "final answer",
+        })
+        await SessionCompaction.create({
+          sessionID: session.id,
+          agent: "build",
+          model: ref,
+          auto: false,
+        })
+
+        const rt = liveRuntime(
+          stub.layer,
+          ProviderTest.fake({
+            model: {
+              ...createModel({ context: 100_000, output: 32_000, npm: "@ai-sdk/amazon-bedrock" }),
+              api: {
+                id: "amazon.nova-pro-v1:0",
+                url: "https://bedrock-runtime.us-east-1.amazonaws.com",
+                npm: "@ai-sdk/amazon-bedrock",
+              },
+            },
+          }),
+        )
+        try {
+          const msgs = await svc.messages({ sessionID: session.id })
+          const parent = msgs.at(-1)?.info.id
+          expect(parent).toBeTruthy()
+          await rt.runPromise(
+            SessionCompaction.Service.use((svc) =>
+              svc.process({
+                parentID: parent!,
+                messages: msgs,
+                sessionID: session.id,
+                auto: false,
+              }),
+            ),
+          )
+
+          expect(captured).toContain("final answer")
+          expect(captured).toContain("private thinking")
+          expect(captured).toContain("sig")
+        } finally {
+          await rt.dispose()
+        }
+      },
+    })
+  })
+
   test("falls back to full summary when retained tail media exceeds preserve token budget", async () => {
     await using tmp = await tmpdir({ git: true })
     const stub = llm()

@@ -21,6 +21,7 @@ import { makeRuntime } from "@/effect/run-service"
 import { fn } from "@/util/fn"
 import { EventV2 } from "@/v2/event"
 import { SessionEvent } from "@/v2/session-event"
+import type { ModelMessage } from "ai"
 
 const log = Log.create({ service: "session.compaction" })
 
@@ -76,6 +77,20 @@ Rules:
 - Use terse bullets, not prose paragraphs.
 - Preserve exact file paths, commands, error strings, and identifiers when known.
 - Do not mention the summary process or that context was compacted.`
+
+function stripBedrockAnthropicSignedReasoning(messages: ModelMessage[]): ModelMessage[] {
+  return messages.flatMap((message): ModelMessage[] => {
+    if (!Array.isArray(message.content)) return [message]
+    const content = message.content.filter((part) => {
+      return (
+        part.type !== "reasoning" ||
+        (part.providerOptions?.bedrock?.signature == null && part.providerOptions?.bedrock?.redactedData == null)
+      )
+    })
+    return content.length > 0 ? [{ ...message, content } as ModelMessage] : []
+  })
+}
+
 type Turn = {
   start: number
   end: number
@@ -409,6 +424,13 @@ export const layer: Layer.Layer<
         stripMedia: true,
         toolOutputMaxChars: TOOL_OUTPUT_MAX_CHARS,
       })
+      // Bedrock removes native tool blocks when compaction runs with tools disabled.
+      // This causes signed Claude thinking corruption.
+      // Do not replay signed Claude thinking after that rewrite.
+      const compactMessages =
+        model.api.npm === "@ai-sdk/amazon-bedrock" && model.api.id.toLowerCase().includes("anthropic")
+          ? stripBedrockAnthropicSignedReasoning(modelMessages)
+          : modelMessages
       const ctx = yield* InstanceState.context
       const msg: MessageV2.Assistant = {
         id: MessageID.ascending(),
@@ -449,7 +471,7 @@ export const layer: Layer.Layer<
         tools: {},
         system: [],
         messages: [
-          ...modelMessages,
+          ...compactMessages,
           {
             role: "user",
             content: [{ type: "text", text: nextPrompt }],
