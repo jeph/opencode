@@ -135,8 +135,15 @@ function normalizeMessages(
         }
         if (!Array.isArray(msg.content)) return msg
         const filtered = msg.content.filter((part) => {
-          if (part.type === "text" || part.type === "reasoning") {
+          if (part.type === "text") {
             return part.text !== ""
+          }
+          if (part.type === "reasoning") {
+            return (
+              part.text.trim().length > 0 ||
+              part.providerOptions?.anthropic?.signature != null ||
+              part.providerOptions?.anthropic?.redactedData != null
+            )
           }
           return true
         })
@@ -156,8 +163,15 @@ function normalizeMessages(
         }
         if (!Array.isArray(msg.content)) return msg
         const filtered = msg.content.filter((part) => {
-          if (part.type === "text" || part.type === "reasoning") {
+          if (part.type === "text") {
             return part.text !== ""
+          }
+          if (part.type === "reasoning") {
+            return (
+              part.text.trim().length > 0 ||
+              part.providerOptions?.bedrock?.signature != null ||
+              part.providerOptions?.bedrock?.redactedData != null
+            )
           }
           return true
         })
@@ -809,6 +823,10 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
             },
           ]),
         )
+      }
+
+      if (["opus-4-5", "opus-4.5"].some((v) => model.api.id.includes(v))) {
+        return Object.fromEntries(WIDELY_SUPPORTED_EFFORTS.map((effort) => [effort, { effort }]))
       }
 
       return {
